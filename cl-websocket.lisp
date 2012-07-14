@@ -22,9 +22,21 @@
 
 ;; .. and a default implementation for arbitrary streams.
 
+(defun write-uint16 (int stream)
+  ""
+  (write-byte (div int 256) stream)
+  (write-byte (truncate int 256) stream))
+
+
 (defmethod send-frame (stream (message string))
     (write-byte #x81 stream) ;; Final fragment, text frame.
-    (write-byte (length message) stream) ;; TODO implement longer messages.
+
+    (if (<= (length message) 125)
+	(write-byte (length message) stream)
+	(progn
+	  (write-byte 126 stream)
+	  (write-uint16 (length message) stream)))
+	  
     (trivial-utf-8:write-utf-8-bytes message stream)
     (force-output stream))
 
