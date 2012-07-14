@@ -1,0 +1,52 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<script type="text/javascript">
+
+var ws;
+
+function Connect ()
+{
+ws = new WebSocket("ws://localhost:8080");
+
+ws.onopen = function()
+{
+    document.getElementsByName('result')[0].innerHTML="Connected";
+};
+
+ws.onmessage = function (evt) 
+{ 
+    document.getElementsByName('result')[0].innerHTML=evt.data;
+};
+
+ws.onclose = function()
+{ 
+    document.getElementsByName('result')[0].innerHTML="Closed";
+    document.getElementsByName('connect')[0].disabled = '';
+};
+}
+
+function SendMessage(message)
+{
+    ws.send(message);
+}
+
+</script>
+</head>
+<body>
+<h1>WebSocket Tester</h1>
+<div>
+<button name="connect" onclick="JavaScript:Connect();this.disabled = 'disabled'">Connect</button>
+</div>
+
+<div>
+<input type="text" name="textbox" />
+<button name="send" onclick="JavaScript:SendMessage(document.getElementsByName('textbox')[0].value)">Send</button>
+</div>
+
+
+
+<div name='result'></div>
+
+</body>
+</html>

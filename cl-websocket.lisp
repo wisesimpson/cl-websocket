@@ -1,360 +1,105 @@
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;                                                                         ;;;
-;;; Copyright (c) 2010, Simon David Pratt <me@simondavidpratt.com>          ;;;
-;;;                                                                         ;;;
-;;; Permission to use, copy, modify, and/or distribute this software        ;;;
-;;; for any purpose with or without fee is hereby granted, provided         ;;;
-;;; that the above copyright notice and this permission notice appear       ;;;
-;;; in all copies.                                                          ;;;
-;;;                                                                         ;;;
-;;; THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL           ;;;
-;;; WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED           ;;;
-;;; WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE        ;;;
-;;; AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR                  ;;;
-;;; CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM          ;;;
-;;; LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,         ;;;
-;;; NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN               ;;;
-;;; CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.                ;;;
-;;;                                                                         ;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;                                                                         ;;;
-;;; FILE:    cl-websocket.lisp                                              ;;;
-;;;                                                                         ;;;
-;;; MODULE:  Common-Lisp-Websocket                                          ;;;
-;;;                                                                         ;;;
-;;; NOTES:   Implements the WebSocket draft protocol as specified in        ;;;
-;;;          draft-ietf-hybi-thewebsocketprotocol-03.                       ;;;
-;;;                                                                         ;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; cl-websocket.lisp
+;;;; Copyright (c) 2012, Rob Blackwell.  All rights reserved.
 
-(cl:in-package #:cl-user)
+(defpackage #:cl-websocket
+  (:use #:cl)
+  (:shadow "DEFCONSTANT")
+  (:export
+   #:send-frame
+   #:receive-frame
+   #:server-handshake))
 
-(cl:defpackage #:cl-websocket
-  (:use #:cl))
+(in-package #:cl-websocket)
 
-(cl:in-package #:cl-websocket)
+(defvar +crlf+ (coerce '(#\return #\linefeed) 'string))
 
-(ql:quickload "md5")
-(ql:quickload "trivial-utf-8")
+;; Define a protocol for sending and receiving WebSocket frames.
 
-(defun split-string (string &key (delimiter (string #\Space)) (max -1))
-    "Returns a list of substrings of string
-divided by the delimiter.  If there are more than max
-delimiters in the string, the last substring will be contain
-the unsplit string remaining after the maxth delimiter.
+(defgeneric send-frame (stream data)
+  (:documentation "Sends data to a websocket using the appropriate framing."))
 
-Max is -1 by default, which splits the string on all delimiters.
-Note: Two consecutive delimiters will be seen as
-if there were an empty string between them."
-    (let ((pos (search delimiter string)))
-      (if (or (= max 0) (eq nil pos))
-	  (list string)
-	  (cons
-	   (subseq string 0 pos)
-	   (split-string (subseq string (+ pos (length delimiter)))
-			 :delimiter delimiter
-			 :max (if (= max -1)
-				  -1
-				  (- max 1)))))))
+(defgeneric receive-frame (stream)
+  (:documentation "Receives a frame from a websocket and returns the de-framed data."))
 
-(defun parse-header (header)
-  "Takes an HTTP header and returns a list of sublists of strings,
-where the first string is the fieldname and the second string is
-the value of that field."
-  (loop for string in (split-string header :delimiter (string #\Newline))
-       collect (split-string string :max 1)))
+;; .. and a default implementation for arbitrary streams.
 
-(defun get-field (fields fieldname)
-  "Takes the output of parse-header and returns the value of
-the given fieldname."
-  (dolist (field fields)
+(defmethod send-frame (stream (message string))
+  (write-byte #x81 stream) ;; Final fragment, text frame.
+  (write-byte (length message) stream) ;; TODO implement longer messages.
+  (trivial-utf-8:write-utf-8-bytes message stream)
+  (force-output stream))
 
-    (when (string= fieldname (subseq (car field) 0 (- (length (car field)) 1)))
-      (return (cadr field)))))
+(defmethod receive-frame ((stream t))
+  (let* ((b0 (read-byte stream))
+	 (b1 (read-byte stream))
+	 (fin (> (logand b0 #x80) 0))
+	 (opcode (logand b0 #x0F))
+	 (mask (> (logand b1 #x80) 0))
+	 (len (logand b1 #x7F))
+	 (payload (make-array len :initial-element '(unsigned-byte 8))))
 
-(defun parse-number (string)
-  "Returns the number given by appending the digits in a string
-and dividing by the number of spaces in the string."
-  (let ((i 1)
-	(number 0)
-	(spaces 0))
-    (loop
-       for p from (- (length string) 1) downto 0
-       for char = (char string p)
-       when (eq char #\Space)
-       do
-	 (setf spaces (1+ spaces))
-       when (digit-char-p char)
-       do
-	 (setf number (+ number (* i (parse-integer (string char)))))
-	 (setf i (* i 10)))
-    (/ number spaces)))
+    ;; A server MUST close the connection upon receiving a frame with
+    ;; the MASK bit set to 0.
+    (unless mask
+      (close stream)
+      (return-from receive-frame nil))
 
-(defun number-to-bytes (number)
-  "Generates a vector of bytes from a number"
-  (let ((array (make-array 4 :element-type '(unsigned-byte 8))))
-    (loop
-       for i from 0 to 3
-       do
-       (setf (aref array (- 3 i))
-	     (coerce (ldb (byte 8 (* i 8)) number) '(unsigned-byte 8))))
-    array))
+    ;; Sorry only short messages currently supported
+    (when (> len 125)
+      (close stream)
+      (return-from receive-frame nil))
 
-(defun string-to-bytes (string)
-  "Returns a vector of bytes contained in the input string."
-  (trivial-utf-8:string-to-utf-8-bytes string))
+    ;; TODO Support longer message types
 
-(defun bytes-to-string (byte-array)
-  "Takes a vector of bytes and returns the utf-8 string equivalent."
-  (trivial-utf-8:utf-8-bytes-to-string byte-array))
+    (setf mask (list (read-byte stream) 
+		     (read-byte stream) 
+		     (read-byte stream) 
+		     (read-byte stream)))
 
-(defun cat-byte-array (a1 a2)
-  "Concatenates two arrays of type (unsigned-byte 8)"
-  (let ((array (make-array (+ (length a1) (length a2))
-			   :element-type '(unsigned-byte 8))))
-    ;; The double loop is sort of nasty, but it's better than recursion
-    ;; because it only creates one array to return.
-    (loop
-       for i from 0 to (- (length a1) 1)
-       do
-	 (setf (aref array i) (aref a1 i)))
-    (loop
-       for i from 0 to (- (length a2) 1)
-       do
-	 (setf (aref array (+ i (length a1))) (aref a2 i)))
-    array))
+    (read-sequence payload stream)
 
-(defun handshake-reply (keynumber1 keynumber2 string)
-  "Concatenates keynumber1 and keynumber2 as big-endian 32 bit numbers
-with the 8-byte string, takes the md5 sum and returns the utf8 string.
+    (dotimes (i len)
+      (setf (aref payload i) (logxor (aref payload i) (nth (mod i 4)  mask))))
+    
+    (if (eq opcode #x01) ;; string?
+      (trivial-utf-8:utf-8-bytes-to-string payload)
+      payload)))
 
-See: the handshake protocol of draft-ietf-hybi-thewebsocketprotocol-03"
-  (bytes-to-string
-   (md5:md5sum-sequence
-    (cat-byte-array
-     (number-to-bytes keynumber1)
-     (cat-byte-array
-      (number-to-bytes keynumber2)
-      (string-to-bytes string))))))
+;; TODO: consider implementing binary frames, connection-close, ping
+;; and pong.
 
-(defun parse-packet (http-packet)
-  "Takes an HTTP packet, and returns a cons where the car is the header of
-the packet and the cadr is the body of the packet."
-  (split-string http-packet :delimiter #(#\Newline #\Newline) :max 1))
+(defun parse-headers (client-handshake)
+  "Parses the websocket request client handshake (which looks like
+HTTP) and extracts the headers as an alist of header names and
+values."
+  (let ((headers (car (cl-ppcre:split (concatenate 'string +crlf+ +crlf+) client-handshake))))
+    (loop for string in (cl-ppcre:split +crlf+ headers)
+       collect (cl-ppcre:split #\Space string :limit 2))))
 
-(defun server-response (http-packet)
-  "Given an HTTP packet, returns the server response packet."
-  (let* ((parsed-packet (parse-packet http-packet))
-	 (parsed-header (parse-header (car parsed-packet)))
-	 (body (handshake-reply (parse-number (get-field parsed-header
-							 "Sec-WebSocket-Key1"))
-				(parse-number (get-field parsed-header
-							 "Sec-WebSocket-Key2"))
-				(cadr parsed-packet))))
+(defun compute-acceptance (nonce)
+  "Concatenates the client nonce with a magic string as per RFC6455,
+signs it with SHA1 and returns the resulting signature base64
+encoded."
+  (let ((string-to-sign (concatenate 'string nonce "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")))
+    (cl-base64:usb8-array-to-base64-string
+     (ironclad:digest-sequence
+      :sha1
+      (ironclad:ascii-string-to-byte-array string-to-sign)))))
+
+(defun server-handshake (client-handshake)
+  "Constructs a server handshake corresponding to the given client
+handshake as per RFC6455."
+  (let* ((headers (parse-headers client-handshake))
+	 (nonce (second (assoc "Sec-WebSocket-Key:" headers :test #'string=))))
+
+    ;; Ignore Sec-WebSocket-Version, but we only support 13 at the time of writing.
+    ;; Ignore Sec-WebSocket-Extensions.
+    ;; Ignore Sec-WebSocket-Protocol.
+
     (concatenate 'string
-		 "HTTP/1.1 101 WebSocket Protocol Handshake" #(#\Newline)
-		 "Upgrade: WebSocket" #(#\Newline)
-		 "Connection: Upgrade" #(#\Newline)
-		 "Sec-WebSocket-Origin: " (get-field parsed-header "Origin")
-		 #(#\Newline)
-		 "Sec-WebSocket-Location: ws://" (get-field parsed-header "Host")
-		 #(#\Newline)
-		 "Sec-WebSocket-Protocol: " (car
-					     (split-string
-					      (get-field parsed-header
-							 "Sec-WebSocket-Protocol")))
-		 #(#\Newline) #(#\Newline)
-		 body)))
+		 "HTTP/1.1 101 Switching Protocols" +crlf+
+		 "Upgrade: websocket" +crlf+
+		 "Connection: Upgrade" +crlf+
+		 "Sec-WebSocket-Accept: " (compute-acceptance nonce) +crlf+
+		 +crlf+)))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal Tests                                                          ;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(ql:quickload "lisp-unit")
-
-(use-package :lisp-unit)
-
-(define-test split-string
-  (assert-equal
-   (split-string "Host: example.com")
-   ;; Expected:
-   '("Host:" "example.com"))
-  
-  (assert-equal
-   (split-string "GET /demo HTTP/1.1" :max 1)
-   ;; Expected:
-   '("GET" "/demo HTTP/1.1"))
-  
-  (assert-equal
-   (split-string
-    "GET /demo HTTP/1.1
-Host: example.com
-Connection: Upgrade
-Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
-Sec-WebSocket-Protocol: sample
-Upgrade: WebSocket
-Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
-Origin: http://example.com"
-    :delimiter #(#\Newline))
-   ;; Expected:
-   '("GET /demo HTTP/1.1" "Host: example.com" "Connection: Upgrade" "Sec-WebSocket-Key2: 12998 5 Y3 1  .P00" "Sec-WebSocket-Protocol: sample" "Upgrade: WebSocket" "Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5" "Origin: http://example.com"))
-  
-  (assert-equal
-   (split-string
-    "GET /demo HTTP/1.1
-Host: example.com
-Connection: Upgrade
-Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
-Sec-WebSocket-Protocol: sample
-Upgrade: WebSocket
-Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
-Origin: http://example.com
-
-^n:ds[4U"
-    :delimiter #(#\Newline #\Newline)
-    :max 1)
-   ;; Expected:
-   '("GET /demo HTTP/1.1
-Host: example.com
-Connection: Upgrade
-Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
-Sec-WebSocket-Protocol: sample
-Upgrade: WebSocket
-Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
-Origin: http://example.com" "^n:ds[4U")))
-
-(define-test parse-header
-  (assert-equal
-   (parse-header "GET /demo HTTP/1.1
-Host: example.com
-Connection: Upgrade
-Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
-Sec-WebSocket-Protocol: sample
-Upgrade: WebSocket
-Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
-Origin: http://example.com")
-   ;; Expected:
-   '(("GET" "/demo HTTP/1.1")
-     ("Host:" "example.com")
-     ("Connection:" "Upgrade")
-     ("Sec-WebSocket-Key2:" "12998 5 Y3 1  .P00")
-     ("Sec-WebSocket-Protocol:" "sample")
-     ("Upgrade:" "WebSocket")
-     ("Sec-WebSocket-Key1:" "4 @1  46546xW%0l 1 5")
-     ("Origin:" "http://example.com"))))
-
-(define-test get-field
-  (assert-equal
-   (get-field '(("GET" "/demo HTTP/1.1")
-		("Host:" "example.com")
-		("Connection:" "Upgrade")
-		("Sec-WebSocket-Key2:" "12998 5 Y3 1  .P00")
-		("Sec-WebSocket-Protocol:" "sample")
-		("Upgrade:" "WebSocket")
-		("Sec-WebSocket-Key1:" "4 @1  46546xW%0l 1 5")
-		("Origin:" "http://example.com"))
-	      "Upgrade")
-   ;; Expected:
-   "WebSocket"))
-
-(define-test parse-number
-  (assert-equal
-   (parse-number "12998 5 Y3 1  .P00")
-   ;; Expected:
-   259970620))
-
-(define-test number-to-bytes
-  (assert-equalp ; must use equalp for arrays
-   (number-to-bytes 259970620)
-   ;; Expected:
-   #(15 126 214 60)))
-
-(define-test string-to-bytes
-  (assert-equalp
-   (string-to-bytes "^n:ds[4U")
-   ;; Expected:
-   #(94 110 58 100 115 91 52 85)))
-
-(define-test bytes-to-string
-  (assert-equal
-   (bytes-to-string #(94 110 58 100 115 91 52 85))
-   ;; Expected:
-   "^n:ds[4U"))
-
-(define-test cat-byte-array
-  (assert-equalp
-   (cat-byte-array #(94 110 58 100 115 91 52 85)
-		   #(94 110 58 100 115 91 52 85))
-   ;; Expected:
-   #(94 110 58 100 115 91 52 85 94 110 58 100 115 91 52 85)))
-
-(define-test handshake-reply
-  (assert-equal
-   (handshake-reply 829309203 259970620 "^n:ds[4U")
-   ;; Expected:
-   "8jKS'y:G*Co,Wxa-"))
-
-(define-test parse-packet
-  (assert-equal
-   (parse-packet "GET /demo HTTP/1.1
-Host: example.com
-Connection: Upgrade
-Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
-Sec-WebSocket-Protocol: sample
-Upgrade: WebSocket
-Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
-Origin: http://example.com
-
-^n:ds[4U")
-   ;; Expected:
-   '("GET /demo HTTP/1.1
-Host: example.com
-Connection: Upgrade
-Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
-Sec-WebSocket-Protocol: sample
-Upgrade: WebSocket
-Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
-Origin: http://example.com" "^n:ds[4U")))
-
-(define-test server-response
-  (assert-equal
-   (server-response "GET /demo HTTP/1.1
-Host: example.com
-Connection: Upgrade
-Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
-Sec-WebSocket-Protocol: sample
-Upgrade: WebSocket
-Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
-Origin: http://example.com
-
-^n:ds[4U")
-   ;; Expected:
-   "HTTP/1.1 101 WebSocket Protocol Handshake
-Upgrade: WebSocket
-Connection: Upgrade
-Sec-WebSocket-Origin: http://example.com
-Sec-WebSocket-Location: ws://example.com
-Sec-WebSocket-Protocol: sample
-
-8jKS'y:G*Co,Wxa-")
-
-  (assert-equal
-   (server-response "GET /demo HTTP/1.1
-Host: example.com
-Connection: Upgrade
-Sec-WebSocket-Key2: 1_ tx7X d  <  nw  334J702) 7]o}` 0
-Sec-WebSocket-Protocol: sample
-Upgrade: WebSocket
-Sec-WebSocket-Key1: 18x 6]8vM;54 *(5:  {   U1]8  z [  8
-Origin: http://example.com
-
-Tm[K T2u")
-   ;; Expected:
-   "HTTP/1.1 101 WebSocket Protocol Handshake
-Upgrade: WebSocket
-Connection: Upgrade
-Sec-WebSocket-Origin: http://example.com
-Sec-WebSocket-Location: ws://example.com
-Sec-WebSocket-Protocol: sample
-
-fQJ,fN/4F4!~K~MH"))
