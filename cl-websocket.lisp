@@ -3,7 +3,6 @@
 
 (defpackage #:cl-websocket
   (:use #:cl)
-  (:shadow "DEFCONSTANT")
   (:export
    #:send-frame
    #:receive-frame
