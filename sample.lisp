@@ -6,7 +6,8 @@
   (:export
    #:echo-server
    #:repl-server
-   #:websocket-server))
+   #:websocket-server
+   #:connect-websocket))
 
 (in-package #:cl-websocket-sample)
 
@@ -49,4 +50,29 @@ rest."
 
 (defun repl-server ( &key (host usocket:*wildcard-host*) (port 8080))
   (websocket-server #'repl))
+
+(defvar *socket* nil)
+
+(defun connect-websocket ()
+  "Waits for a WebSocket client to connect on localhost 8080, sends
+the required handshake to upgrade the connection, returns a bi
+directional stream over the underlying WebSocket."
+
+  ;; First time, bind a listening socket
+  (unless *socket*
+    (setf *socket* (usocket:socket-listen usocket:*wildcard-host*
+                         8080
+                         :element-type '(unsigned-byte 8)
+                         :reuse-address t)))
+
+  (usocket:wait-for-input *socket*)
+
+  (let* ((stream (usocket:socket-stream (usocket:socket-accept *socket*))))
+
+    ;; Do the handshake
+    (trivial-utf-8:write-utf-8-bytes (cl-websocket:server-handshake (read-all stream)) stream)
+    (force-output stream)
+
+    stream))
+
 

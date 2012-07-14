@@ -23,10 +23,10 @@
 ;; .. and a default implementation for arbitrary streams.
 
 (defmethod send-frame (stream (message string))
-  (write-byte #x81 stream) ;; Final fragment, text frame.
-  (write-byte (length message) stream) ;; TODO implement longer messages.
-  (trivial-utf-8:write-utf-8-bytes message stream)
-  (force-output stream))
+    (write-byte #x81 stream) ;; Final fragment, text frame.
+    (write-byte (length message) stream) ;; TODO implement longer messages.
+    (trivial-utf-8:write-utf-8-bytes message stream)
+    (force-output stream))
 
 (defmethod receive-frame ((stream t))
   (let* ((b0 (read-byte stream))
