@@ -9,7 +9,7 @@
   :depends-on (#:ironclad
                #:cl-base64
 	       #:cl-ppcre
-	       #:trivial-utf-8)
+	       #:babel)
 
   :components ((:file "cl-websocket")))
 

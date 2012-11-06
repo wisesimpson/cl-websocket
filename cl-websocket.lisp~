@@ -31,14 +31,13 @@
 (defmethod send-frame (stream (message string))
   (write-byte #x81 stream) ;; Final fragment, text frame.
 
-  (let ((message-octets (babel:string-to-octets message :encoding :utf-8)))
-    (if (<= (length message-octets) 125)
-	(write-byte (length message-octets) stream)
-	(progn ;need to change
-	  (write-byte 126 stream)
-	  (write-uint16 (length message) stream)))
-    
-    (write-sequence message-octets stream))
+  (if (<= (length message) 125)
+      (write-byte (length message) stream)
+      (progn
+	(write-byte 126 stream)
+	(write-uint16 (length message) stream)))
+  
+  (write-sequence (babel:string-to-octets message :encoding :utf-8) stream)
   (force-output stream))
 
 (defmethod receive-frame ((stream t))
@@ -74,8 +73,8 @@
       (setf (aref payload i) (logxor (aref payload i) (nth (mod i 4)  mask))))
     
     (if (eq opcode #x01) ;; string?
-	(babel:octets-to-string (coerce payload '(simple-array (unsigned-byte 8))) :encoding :utf-8)
-	payload)))
+      (babel:octets-to-string (coerce payload '(simple-array (unsigned-byte 8))) :encoding :utf-8)
+      payload)))
 
 ;; TODO: consider implementing binary frames, connection-close, ping
 ;; and pong.
