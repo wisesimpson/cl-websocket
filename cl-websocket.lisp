@@ -45,12 +45,12 @@
   (let ((b0 (read-byte stream nil :eof)))
     (if (eq :eof b0)
 	(return-from receive-frame :eof)
-	(let* (b1 (read-byte stream))
-	  (fin (> (logand b0 #x80) 0))
-	  (opcode (logand b0 #x0F))
-	  (mask (> (logand b1 #x80) 0))
-	  (len (logand b1 #x7F))
-	  (payload (make-array len :initial-element '(unsigned-byte 8)))
+	(let* ((b1 (read-byte stream))
+	       (fin (> (logand b0 #x80) 0))
+	       (opcode (logand b0 #x0F))
+	       (mask (> (logand b1 #x80) 0))
+	       (len (logand b1 #x7F))
+	       (payload (make-array len :initial-element '(unsigned-byte 8))))
 
 	  ;; A server MUST close the connection upon receiving a frame with
 	  ;; the MASK bit set to 0.
