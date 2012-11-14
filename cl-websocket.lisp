@@ -33,10 +33,10 @@
 
   (let ((message-octets (babel:string-to-octets message :encoding :utf-8)))
     (if (<= (length message-octets) 125)
-	(write-byte (length message-octets) stream)
-	(progn ;need to change
-	  (write-byte 126 stream)
-	  (write-uint16 (length message) stream)))
+        (write-byte (length message-octets) stream)
+        (progn ;need to change
+          (write-byte 126 stream)
+          (write-uint16 (length message) stream)))
     
     (write-sequence message-octets stream))
   (force-output stream))
@@ -44,40 +44,40 @@
 (defmethod receive-frame ((stream t))
   (let ((b0 (read-byte stream nil :eof)))
     (if (eq :eof b0)
-	(return-from receive-frame :eof)
-	(let* ((b1 (read-byte stream))
-	       (fin (> (logand b0 #x80) 0))
-	       (opcode (logand b0 #x0F))
-	       (mask (> (logand b1 #x80) 0))
-	       (len (logand b1 #x7F))
-	       (payload (make-array len :initial-element '(unsigned-byte 8))))
+        (return-from receive-frame :eof)
+        (let* ((b1 (read-byte stream))
+               (fin (> (logand b0 #x80) 0))
+               (opcode (logand b0 #x0F))
+               (mask (> (logand b1 #x80) 0))
+               (len (logand b1 #x7F))
+               (payload (make-array len :initial-element '(unsigned-byte 8))))
 
-	  ;; A server MUST close the connection upon receiving a frame with
-	  ;; the MASK bit set to 0.
-	  (unless mask
-	    (close stream)
-	    (return-from receive-frame nil))
+          ;; A server MUST close the connection upon receiving a frame with
+          ;; the MASK bit set to 0.
+          (unless mask
+            (close stream)
+            (return-from receive-frame nil))
 
-	  ;; Sorry only short messages currently supported
-	  (when (> len 125)
-	    (close stream)
-	    (return-from receive-frame nil))
+          ;; Sorry only short messages currently supported
+          (when (> len 125)
+            (close stream)
+            (return-from receive-frame nil))
 
-	  ;; TODO Support longer message types
+          ;; TODO Support longer message types
 
-	  (setf mask (list (read-byte stream) 
-			   (read-byte stream) 
-			   (read-byte stream) 
-			   (read-byte stream)))
+          (setf mask (list (read-byte stream) 
+                           (read-byte stream) 
+                           (read-byte stream) 
+                           (read-byte stream)))
 
-	  (read-sequence payload stream)
+          (read-sequence payload stream)
 
-	  (dotimes (i len)
-	    (setf (aref payload i) (logxor (aref payload i) (nth (mod i 4)  mask))))
-	  
-	  (if (eq opcode #x01) ;; string?
-	      (babel:octets-to-string (coerce payload '(simple-array (unsigned-byte 8))) :encoding :utf-8)
-	      payload)))))
+          (dotimes (i len)
+            (setf (aref payload i) (logxor (aref payload i) (nth (mod i 4)  mask))))
+          
+          (if (eq opcode #x01) ;; string?
+              (babel:octets-to-string (coerce payload '(simple-array (unsigned-byte 8))) :encoding :utf-8)
+              payload)))))
 
 ;; TODO: consider implementing binary frames, connection-close, ping
 ;; and pong.
@@ -104,16 +104,16 @@ encoded."
   "Constructs a server handshake corresponding to the given client
 handshake as per RFC6455."
   (let* ((headers (parse-headers client-handshake))
-	 (nonce (second (assoc "Sec-WebSocket-Key:" headers :test #'string=))))
+         (nonce (second (assoc "Sec-WebSocket-Key:" headers :test #'string=))))
 
     ;; Ignore Sec-WebSocket-Version, but we only support 13 at the time of writing.
     ;; Ignore Sec-WebSocket-Extensions.
     ;; Ignore Sec-WebSocket-Protocol.
 
     (concatenate 'string
-		 "HTTP/1.1 101 Switching Protocols" +crlf+
-		 "Upgrade: websocket" +crlf+
-		 "Connection: Upgrade" +crlf+
-		 "Sec-WebSocket-Accept: " (compute-acceptance nonce) +crlf+
-		 +crlf+)))
+                 "HTTP/1.1 101 Switching Protocols" +crlf+
+                 "Upgrade: websocket" +crlf+
+                 "Connection: Upgrade" +crlf+
+                 "Sec-WebSocket-Accept: " (compute-acceptance nonce) +crlf+
+                 +crlf+)))
 
